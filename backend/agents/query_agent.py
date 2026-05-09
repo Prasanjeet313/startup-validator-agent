@@ -1,10 +1,6 @@
 import json
-from openai import OpenAI
-from backend.config import OPENAI_API_KEY, OPENAI_MODEL
-from backend.models.idea import IdeaBrief, QueryPlan
-
-def _client() -> OpenAI:
-    return OpenAI(api_key=OPENAI_API_KEY)
+from backend.llm_provider import make_completion, resolve_api_key
+from backend.models.idea import IdeaBrief, QueryPlan, LLMConfig
 
 _SYSTEM = """You are a market research strategist. Generate search queries that surface real user pain,
 demand, complaints, and discussions about a startup idea's problem space.
@@ -28,7 +24,7 @@ Queries must be natural language phrases people actually type, not keyword stuff
 Cover different angles: pain, solution-seeking, existing alternatives, specific use cases."""
 
 
-def generate_query_plan(idea_brief: IdeaBrief) -> QueryPlan:
+def generate_query_plan(idea_brief: IdeaBrief, llm_config: LLMConfig) -> QueryPlan:
     """Generate optimised Reddit + YouTube search queries from an Idea Brief."""
     brief_text = (
         f"Core idea: {idea_brief.core_idea}\n"
@@ -38,13 +34,15 @@ def generate_query_plan(idea_brief: IdeaBrief) -> QueryPlan:
         f"Unique angle: {idea_brief.unique_angle}\n"
         f"Keywords: {', '.join(idea_brief.keywords)}"
     )
-    resp = _client().chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
+    key = resolve_api_key(llm_config.provider, llm_config.api_key)
+    resp = make_completion(
+        llm_config.provider,
+        llm_config.model,
+        key,
+        [
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": brief_text},
         ],
-        response_format={"type": "json_object"},
         temperature=0.5,
     )
-    return QueryPlan(**json.loads(resp.choices[0].message.content))
+    return QueryPlan(**json.loads(resp))

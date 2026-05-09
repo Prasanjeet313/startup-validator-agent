@@ -4,9 +4,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = "gpt-4o"
-
 # Not used yet — will activate when YouTube API key is added (Phase 1 later)
 YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
 

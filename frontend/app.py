@@ -8,7 +8,7 @@ st.set_page_config(
     page_title="IdeaValidator",
     page_icon="🔍",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ── Session state defaults ────────────────────────────────────────────────────
@@ -16,6 +16,10 @@ for key, default in [
     ("screen", "input"),
     ("run_id", None),
     ("questions", []),
+    ("provider", "groq"),
+    ("model", "llama-3.3-70b-versatile"),
+    ("api_key", ""),
+    ("providers_data", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -57,9 +61,102 @@ def api_get(path: str) -> dict | None:
     return None
 
 
+def _llm_config() -> dict:
+    """Build the llm_config payload from current session state."""
+    return {
+        "provider": st.session_state.provider,
+        "model": st.session_state.model,
+        "api_key": st.session_state.api_key if st.session_state.api_key else None,
+    }
+
+
+# ── Sidebar: Provider & Model Selection ──────────────────────────────────────
+
+def sidebar_provider_settings():
+    st.sidebar.title("⚙️ AI Provider")
+    st.sidebar.markdown("---")
+
+    # Fetch provider catalog once per session
+    if st.session_state.providers_data is None:
+        data = api_get("/providers")
+        if data:
+            st.session_state.providers_data = data.get("providers", [])
+
+    providers = st.session_state.providers_data or []
+    if not providers:
+        st.sidebar.warning("Could not load providers. Is the backend running?")
+        return
+
+    provider_ids = [p["id"] for p in providers]
+    provider_names = {p["id"]: p["name"] for p in providers}
+
+    current_idx = provider_ids.index(st.session_state.provider) if st.session_state.provider in provider_ids else 0
+
+    selected_provider_id = st.sidebar.selectbox(
+        "Provider",
+        options=provider_ids,
+        format_func=lambda x: provider_names[x],
+        index=current_idx,
+        key="provider_select",
+    )
+
+    # If provider changed, reset model to its default
+    if selected_provider_id != st.session_state.provider:
+        provider_info = next(p for p in providers if p["id"] == selected_provider_id)
+        st.session_state.provider = selected_provider_id
+        st.session_state.model = provider_info["default_model"]
+        st.session_state.api_key = ""
+        st.rerun()
+
+    provider_info = next(p for p in providers if p["id"] == selected_provider_id)
+    models = provider_info["models"]
+    current_model = st.session_state.model
+    model_idx = models.index(current_model) if current_model in models else 0
+
+    selected_model = st.sidebar.selectbox(
+        "Model",
+        options=models,
+        index=model_idx,
+        key="model_select",
+    )
+    st.session_state.model = selected_model
+
+    st.sidebar.markdown("**API Key**")
+    has_env_key = provider_info["has_env_key"]
+
+    if has_env_key and not st.session_state.api_key:
+        st.sidebar.caption("Using key from .env")
+
+    api_key_input = st.sidebar.text_input(
+        "API Key",
+        value=st.session_state.api_key,
+        placeholder="Override .env key..." if has_env_key else "Paste your API key here...",
+        type="password",
+        label_visibility="collapsed",
+        key="api_key_input",
+    )
+    st.session_state.api_key = api_key_input
+
+    # Status indicator
+    key_available = has_env_key or bool(api_key_input)
+    if key_available:
+        st.sidebar.success(f"✅ {provider_names[selected_provider_id]} ready")
+    else:
+        st.sidebar.warning(f"⚠️ Enter an API key to continue")
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption(
+        "Supported: Groq, Gemini, OpenAI, Anthropic, Ollama (local)"
+    )
+
+    return key_available
+
+
 # ── Screen 1: Idea Input ──────────────────────────────────────────────────────
 
 def screen_input():
+    key_ok = sidebar_provider_settings()
+
     col_left, col_right = st.columns([2, 1])
 
     with col_left:
@@ -80,8 +177,14 @@ def screen_input():
             if not idea.strip():
                 st.warning("Please describe your idea first.")
                 return
+            if not key_ok:
+                st.error("Please configure an AI provider and API key in the sidebar first.")
+                return
             with st.spinner("Analyzing your idea..."):
-                result = api_post("/validate", {"idea": idea.strip()})
+                result = api_post("/validate", {
+                    "idea": idea.strip(),
+                    "llm_config": _llm_config(),
+                })
             if result:
                 st.session_state.run_id = result["run_id"]
                 st.session_state.questions = result["questions"]
@@ -93,13 +196,13 @@ def screen_input():
         st.markdown("")
         st.markdown("**What you'll get:**")
         st.markdown("""
-🔥 **Buzz Score** — how much people are talking  
-✅ **Validation Score** — how strong the demand is  
-📊 **Sentiment breakdown**  
-📈 **Key metrics** from scraped data  
-✅ **Pros** backed by real posts  
-⚠️ **Cons** backed by real posts  
-💬 **Real quotes** from the community  
+🔥 **Buzz Score** — how much people are talking
+✅ **Validation Score** — how strong the demand is
+📊 **Sentiment breakdown**
+📈 **Key metrics** from scraped data
+✅ **Pros** backed by real posts
+⚠️ **Cons** backed by real posts
+💬 **Real quotes** from the community
 🧠 **AI reasoning** paragraph
         """)
         st.markdown("---")
@@ -109,6 +212,8 @@ def screen_input():
 # ── Screen 2: Clarifying Questions ────────────────────────────────────────────
 
 def screen_questions():
+    sidebar_provider_settings()
+
     st.title("🎯 A few quick questions")
     st.markdown(
         "The AI needs a bit more context to run better, more targeted research. "
@@ -146,12 +251,13 @@ def screen_questions():
 # ── Screen 3: Pipeline Status ─────────────────────────────────────────────────
 
 def screen_status():
+    sidebar_provider_settings()
+
     run_id = st.session_state.run_id
     data = api_get(f"/status/{run_id}")
     if not data:
         return
 
-    # Server was restarted — run_id lost from memory
     if data.get("_not_found"):
         st.warning("The server was restarted and lost your session. Please start over.")
         if st.button("Start Over"):
@@ -195,6 +301,8 @@ def screen_status():
 # ── Screen 4: Report ──────────────────────────────────────────────────────────
 
 def screen_report():
+    sidebar_provider_settings()
+
     run_id = st.session_state.run_id
     data = api_get(f"/report/{run_id}")
     if not data:

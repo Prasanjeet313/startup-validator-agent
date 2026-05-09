@@ -1,10 +1,6 @@
 import json
-from openai import OpenAI
-from backend.config import OPENAI_API_KEY, OPENAI_MODEL
-from backend.models.idea import IdeaBrief
-
-def _client() -> OpenAI:
-    return OpenAI(api_key=OPENAI_API_KEY)
+from backend.llm_provider import make_completion, resolve_api_key
+from backend.models.idea import IdeaBrief, LLMConfig
 
 _QUESTION_SYSTEM = """You are an expert idea analyst helping validate startup and product ideas.
 Your job is to ask sharp, targeted clarifying questions to deeply understand a raw idea before running market research.
@@ -40,33 +36,41 @@ Keywords must be the best search terms to find real Reddit/YouTube discussions a
 Mix broad pain terms, specific solution terms, and community terms."""
 
 
-def get_clarifying_questions(raw_idea: str) -> list[str]:
-    """Call GPT-4o with the raw idea, return 4-5 clarifying questions."""
-    resp = _client().chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
+def _complete(llm_config: LLMConfig, messages: list, temperature: float) -> str:
+    key = resolve_api_key(llm_config.provider, llm_config.api_key)
+    return make_completion(llm_config.provider, llm_config.model, key, messages, temperature)
+
+
+def get_clarifying_questions(raw_idea: str, llm_config: LLMConfig) -> list[str]:
+    """Return 4-5 clarifying questions for the raw idea."""
+    resp = _complete(
+        llm_config,
+        [
             {"role": "system", "content": _QUESTION_SYSTEM},
             {"role": "user", "content": f"Raw idea: {raw_idea}"},
         ],
-        response_format={"type": "json_object"},
         temperature=0.7,
     )
-    return json.loads(resp.choices[0].message.content)["questions"]
+    return json.loads(resp)["questions"]
 
 
-def build_idea_brief(raw_idea: str, questions: list[str], answers: list[str]) -> IdeaBrief:
+def build_idea_brief(
+    raw_idea: str,
+    questions: list[str],
+    answers: list[str],
+    llm_config: LLMConfig,
+) -> IdeaBrief:
     """Synthesise a structured Idea Brief from the original idea + Q&A session."""
     qa = "\n".join(
         f"Q{i + 1}: {q}\nA{i + 1}: {a}"
         for i, (q, a) in enumerate(zip(questions, answers))
     )
-    resp = _client().chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
+    resp = _complete(
+        llm_config,
+        [
             {"role": "system", "content": _BRIEF_SYSTEM},
             {"role": "user", "content": f"Raw idea: {raw_idea}\n\nQ&A session:\n{qa}"},
         ],
-        response_format={"type": "json_object"},
         temperature=0.3,
     )
-    return IdeaBrief(**json.loads(resp.choices[0].message.content))
+    return IdeaBrief(**json.loads(resp))

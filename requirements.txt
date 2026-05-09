@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 streamlit
 openai
+anthropic
 httpx
 google-api-python-client
 pandas

@@ -1,9 +1,16 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+
+
+class LLMConfig(BaseModel):
+    provider: str = "groq"
+    model: str = "llama-3.3-70b-versatile"
+    api_key: Optional[str] = None
 
 
 class IdeaInput(BaseModel):
     idea: str
+    llm_config: LLMConfig = LLMConfig()
 
 
 class AnswerInput(BaseModel):
@@ -21,4 +28,4 @@ class IdeaBrief(BaseModel):
 
 class QueryPlan(BaseModel):
     reddit_queries: List[str]
-    youtube_queries: List[str]   # generated but not used until YouTube is wired in
+    youtube_queries: List[str]

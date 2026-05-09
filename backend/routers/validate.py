@@ -10,6 +10,7 @@ from backend.agents.query_agent import generate_query_plan
 from backend.agents.analysis_agent import analyze
 from backend.scrapers.reddit_scraper import run_all_queries as reddit_scrape
 from backend.storage.excel_writer import save_run
+from backend.llm_provider import providers_status
 
 router = APIRouter()
 log = logging.getLogger("pipeline")
@@ -23,10 +24,11 @@ def _pipeline(run_id: str) -> None:
     when the YouTube Data API key is added to .env.
     """
     state = runs[run_id]
+    llm_config = state.llm_config
     try:
         log.info("[%s] Stage 1/3 — generating search queries", run_id)
         state.status = "querying"
-        state.query_plan = generate_query_plan(state.idea_brief)
+        state.query_plan = generate_query_plan(state.idea_brief, llm_config)
         log.info(
             "[%s] Query plan ready — %d Reddit queries, %d YouTube queries",
             run_id,
@@ -45,7 +47,6 @@ def _pipeline(run_id: str) -> None:
         # ── YouTube hook (activate in Phase 1 later) ─────────────────────────
         # from backend.scrapers.youtube_scraper import run_all_queries as yt_scrape
         # yt_videos, yt_comments = yt_scrape(run_id, state.query_plan.youtube_queries)
-        # Then pass yt_videos, yt_comments to save_run below.
         # ─────────────────────────────────────────────────────────────────────
 
         state.excel_path = save_run(run_id, posts, comments)
@@ -53,7 +54,7 @@ def _pipeline(run_id: str) -> None:
 
         log.info("[%s] Stage 3/3 — AI analysis", run_id)
         state.status = "analyzing"
-        state.report = analyze(run_id, state.excel_path, state.idea_brief)
+        state.report = analyze(run_id, state.excel_path, state.idea_brief, llm_config)
         log.info(
             "[%s] Analysis done — Buzz: %d, Validation: %d",
             run_id,
@@ -72,6 +73,12 @@ def _pipeline(run_id: str) -> None:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@router.get("/providers")
+def list_providers():
+    """Return available LLM providers and their env-key status."""
+    return {"providers": providers_status()}
+
+
 @router.post("/validate")
 def start_validation(body: IdeaInput):
     """
@@ -79,10 +86,11 @@ def start_validation(body: IdeaInput):
     Returns run_id + 4-5 clarifying questions to show in the UI.
     """
     run_id = str(uuid.uuid4())[:8]
-    questions = get_clarifying_questions(body.idea)
+    questions = get_clarifying_questions(body.idea, body.llm_config)
     runs[run_id] = RunState(
         run_id=run_id,
         raw_idea=body.idea,
+        llm_config=body.llm_config,
         status="awaiting_answers",
         questions=questions,
     )
@@ -99,7 +107,9 @@ def submit_answers(run_id: str, body: AnswerInput):
     if not state:
         raise HTTPException(status_code=404, detail="Run not found")
     state.answers = body.answers
-    state.idea_brief = build_idea_brief(state.raw_idea, state.questions, body.answers)
+    state.idea_brief = build_idea_brief(
+        state.raw_idea, state.questions, body.answers, state.llm_config
+    )
     threading.Thread(target=_pipeline, args=(run_id,), daemon=True).start()
     return {"status": "pipeline_started", "run_id": run_id}
 

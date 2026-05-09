@@ -7,8 +7,9 @@ from typing import Optional, Any
 class RunState:
     run_id: str
     raw_idea: str
+    llm_config: Optional[Any] = None   # LLMConfig
     status: str = "awaiting_answers"
-    # clarifying | awaiting_answers | querying | scraping_reddit | analyzing | done | error
+    # awaiting_answers | querying | scraping_reddit | analyzing | done | error
     questions: list[str] = field(default_factory=list)
     answers: list[str] = field(default_factory=list)
     idea_brief: Optional[Any] = None   # IdeaBrief

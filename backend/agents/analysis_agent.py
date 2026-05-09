@@ -1,12 +1,8 @@
 import json
 import pandas as pd
-from openai import OpenAI
-from backend.config import OPENAI_API_KEY, OPENAI_MODEL
-from backend.models.idea import IdeaBrief
+from backend.llm_provider import make_completion, resolve_api_key
+from backend.models.idea import IdeaBrief, LLMConfig
 from backend.models.report import ValidationReport, SentimentBreakdown, KPIs
-
-def _client() -> OpenAI:
-    return OpenAI(api_key=OPENAI_API_KEY)
 
 _SYSTEM = """You are a senior market research analyst. You have been given real social data scraped from Reddit
 about a startup idea. Analyze it and produce a structured validation report.
@@ -30,7 +26,12 @@ Return ONLY a valid JSON object:
 pros: 4-6 items. cons: 3-5 items. key_quotes: 5-8 real quotes that best illustrate demand or pain."""
 
 
-def analyze(run_id: str, excel_path: str, idea_brief: IdeaBrief) -> ValidationReport:
+def analyze(
+    run_id: str,
+    excel_path: str,
+    idea_brief: IdeaBrief,
+    llm_config: LLMConfig,
+) -> ValidationReport:
     """Read scraped Excel data and produce a full ValidationReport."""
     xl = pd.read_excel(excel_path, sheet_name=None)
     posts_df: pd.DataFrame = xl.get("reddit_posts", pd.DataFrame())
@@ -75,12 +76,8 @@ def analyze(run_id: str, excel_path: str, idea_brief: IdeaBrief) -> ValidationRe
         sentiment = SentimentBreakdown(positive=0.0, neutral=100.0, negative=0.0)
 
     # ── Build LLM prompt from top posts + comments ───────────────────────────
-    top_posts = (
-        posts_df.nlargest(25, "score") if total_posts > 0 else posts_df
-    )
-    top_comments = (
-        comments_df.nlargest(40, "score") if total_comments > 0 else comments_df
-    )
+    top_posts = posts_df.nlargest(25, "score") if total_posts > 0 else posts_df
+    top_comments = comments_df.nlargest(40, "score") if total_comments > 0 else comments_df
 
     posts_text = "\n\n".join(
         f"[Score:{int(r.get('score', 0))} | Pain:{r.get('pain_score', 0)} "
@@ -114,16 +111,18 @@ Sentiment breakdown: {sentiment.positive}% positive | {sentiment.neutral}% neutr
 --- TOP COMMENTS (sorted by score) ---
 {comments_text}"""
 
-    resp = _client().chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
+    key = resolve_api_key(llm_config.provider, llm_config.api_key)
+    resp = make_completion(
+        llm_config.provider,
+        llm_config.model,
+        key,
+        [
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        response_format={"type": "json_object"},
         temperature=0.4,
     )
-    data = json.loads(resp.choices[0].message.content)
+    data = json.loads(resp)
 
     return ValidationReport(
         run_id=run_id,
