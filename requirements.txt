@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+streamlit
+openai
+httpx
+google-api-python-client
+pandas
+openpyxl
+python-dotenv
+pydantic
