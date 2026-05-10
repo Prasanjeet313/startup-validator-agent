@@ -14,6 +14,7 @@ class RunState:
     answers: list[str] = field(default_factory=list)
     idea_brief: Optional[Any] = None   # IdeaBrief
     query_plan: Optional[Any] = None   # QueryPlan
+    web_results: Optional[Any] = None   # dict from web_search_scraper
     excel_path: Optional[str] = None
     report: Optional[Any] = None       # ValidationReport
     error: Optional[str] = None

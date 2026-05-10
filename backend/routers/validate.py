@@ -9,6 +9,7 @@ from backend.agents.clarification_agent import get_clarifying_questions, build_i
 from backend.agents.query_agent import generate_query_plan
 from backend.agents.analysis_agent import analyze
 from backend.scrapers.reddit_scraper import run_all_queries as reddit_scrape
+from backend.scrapers.web_search_scraper import run_web_search
 from backend.storage.excel_writer import save_run
 from backend.llm_provider import providers_status
 
@@ -18,15 +19,20 @@ log = logging.getLogger("pipeline")
 
 def _pipeline(run_id: str) -> None:
     """
-    Full research pipeline — runs in a background thread so the API stays responsive.
+    Full research pipeline — runs in a background thread.
 
-    YouTube hook: uncomment the two lines marked below and import youtube_scrape
-    when the YouTube Data API key is added to .env.
+    Stages:
+      querying        — LLM generates search queries
+      scraping_reddit — Reddit posts + comments scraped
+      searching_web   — DuckDuckGo + Wikipedia search
+      analyzing       — 4 AI agents run in parallel
+      done
     """
     state = runs[run_id]
     llm_config = state.llm_config
     try:
-        log.info("[%s] Stage 1/3 — generating search queries", run_id)
+        # ── Stage 1: Query generation ─────────────────────────────────────────
+        log.info("[%s] Stage 1/4 — generating search queries", run_id)
         state.status = "querying"
         state.query_plan = generate_query_plan(state.idea_brief, llm_config)
         log.info(
@@ -36,7 +42,8 @@ def _pipeline(run_id: str) -> None:
             len(state.query_plan.youtube_queries),
         )
 
-        log.info("[%s] Stage 2/3 — scraping Reddit", run_id)
+        # ── Stage 2: Reddit scraping ──────────────────────────────────────────
+        log.info("[%s] Stage 2/4 — scraping Reddit", run_id)
         state.status = "scraping_reddit"
         posts, comments = reddit_scrape(run_id, state.query_plan.reddit_queries)
         log.info(
@@ -52,9 +59,27 @@ def _pipeline(run_id: str) -> None:
         state.excel_path = save_run(run_id, posts, comments)
         log.info("[%s] Excel saved → %s", run_id, state.excel_path)
 
-        log.info("[%s] Stage 3/3 — AI analysis", run_id)
+        # ── Stage 3: Web search ───────────────────────────────────────────────
+        log.info("[%s] Stage 3/4 — web search (DuckDuckGo + Wikipedia)", run_id)
+        state.status = "searching_web"
+        state.web_results = run_web_search(state.idea_brief)
+        log.info(
+            "[%s] Web search done — %d results, wiki: %s",
+            run_id,
+            len(state.web_results.get("top_results", [])),
+            "yes" if state.web_results.get("wikipedia_summary") else "no",
+        )
+
+        # ── Stage 4: Parallel AI analysis ────────────────────────────────────
+        log.info("[%s] Stage 4/4 — running AI agents in parallel", run_id)
         state.status = "analyzing"
-        state.report = analyze(run_id, state.excel_path, state.idea_brief, llm_config)
+        state.report = analyze(
+            run_id,
+            state.excel_path,
+            state.idea_brief,
+            state.web_results,
+            llm_config,
+        )
         log.info(
             "[%s] Analysis done — Buzz: %d, Validation: %d",
             run_id,
@@ -83,7 +108,7 @@ def list_providers():
 def start_validation(body: IdeaInput):
     """
     Step 1 — Submit the raw idea.
-    Returns run_id + 4-5 clarifying questions to show in the UI.
+    Returns run_id + 4-5 clarifying questions.
     """
     run_id = str(uuid.uuid4())[:8]
     questions = get_clarifying_questions(body.idea, body.llm_config)
@@ -101,7 +126,7 @@ def start_validation(body: IdeaInput):
 def submit_answers(run_id: str, body: AnswerInput):
     """
     Step 2 — Submit answers to the clarifying questions.
-    Builds the Idea Brief and kicks off the full pipeline in a background thread.
+    Builds the Idea Brief and starts the pipeline in a background thread.
     """
     state = runs.get(run_id)
     if not state:
@@ -116,7 +141,7 @@ def submit_answers(run_id: str, body: AnswerInput):
 
 @router.get("/status/{run_id}")
 def get_status(run_id: str):
-    """Poll this to track the pipeline stage. Streamlit polls every 4 seconds."""
+    """Poll this to track the pipeline stage. Frontend polls every 4 seconds."""
     state = runs.get(run_id)
     if not state:
         raise HTTPException(status_code=404, detail="Run not found")

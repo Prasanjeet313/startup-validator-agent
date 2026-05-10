@@ -90,8 +90,11 @@ def _openai_compat_complete(
     messages: list[dict],
     temperature: float,
 ) -> str:
+    import time
+    import logging
     from openai import OpenAI
 
+    log = logging.getLogger("llm_provider")
     info = PROVIDER_CATALOG[provider]
     kwargs: dict = {"api_key": api_key}
     if info["base_url"]:
@@ -102,13 +105,26 @@ def _openai_compat_complete(
     if info["json_mode"]:
         extra["response_format"] = {"type": "json_object"}
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        **extra,
-    )
-    return resp.choices[0].message.content
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                **extra,
+            )
+            return resp.choices[0].message.content
+        except Exception as exc:
+            last_exc = exc
+            err = str(exc).lower()
+            if any(k in err for k in ("rate", "429", "limit", "quota", "too many")):
+                wait = (attempt + 1) * 10
+                log.warning("Rate limit — retrying in %ds (attempt %d/3)", wait, attempt + 1)
+                time.sleep(wait)
+            else:
+                raise
+    raise last_exc
 
 
 def _anthropic_complete(

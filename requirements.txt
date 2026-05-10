@@ -9,3 +9,6 @@ pandas
 openpyxl
 python-dotenv
 pydantic
+plotly
+duckduckgo-search
+wikipedia
